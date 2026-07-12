@@ -1,0 +1,292 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  MODERATOR
+}
+
+enum FileType {
+  IMAGE
+  VIDEO
+  DOCUMENT
+  AUDIO
+  ARCHIVE
+  OTHER
+}
+
+enum FileStatus {
+  UPLOADING
+  SCANNING
+  CLEAN
+  FLAGGED
+  READY
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String?
+  email         String   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          Role     @default(USER)
+  adminRole     AdminRole? // super_admin or moderator, null for regular users
+  status        String   @default("active") // active, suspended, pending
+  storageUsed   BigInt   @default(0)
+  storageQuota  BigInt   @default(5368709120) // 5GB in bytes
+  lastLoginAt   DateTime?
+  lastIp        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts             Account[]
+  sessions             Session[]
+  files                File[]
+  folders              Folder[]
+  shareLinks           ShareLink[]
+  activities           Activity[]
+  auditLogs            AuditLog[]
+  failedLogins         FailedLogin[]
+  impersonationSessions   ImpersonationSession[] @relation("ImpersonationAdmin")
+  impersonatedSessions    ImpersonationSession[] @relation("ImpersonationTarget")
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model Folder {
+  id        String   @id @default(cuid())
+  name      String
+  parentId  String?
+  userId    String
+  color     String?
+  icon      String?
+  isTrash   Boolean  @default(false)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent     Folder?     @relation("FolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children   Folder[]    @relation("FolderTree")
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files      File[]
+  shareLinks ShareLink[]
+
+  @@index([userId])
+  @@index([parentId])
+  @@index([isTrash])
+  @@map("folders")
+}
+
+model File {
+  id              String     @id @default(cuid())
+  name            String
+  originalName    String
+  extension       String
+  mimeType        String
+  size            BigInt
+  storagePath     String
+  thumbnailPath   String?
+  type            FileType   @default(OTHER)
+  status          FileStatus @default(UPLOADING)
+  width           Int?
+  height          Int?
+  duration        Float?
+  checksum        String?
+  isTrash         Boolean    @default(false)
+  deletedAt       DateTime?
+  folderId        String?
+  userId          String
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  folder    Folder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shareLink ShareLink[]
+
+  @@index([userId])
+  @@index([folderId])
+  @@index([type])
+  @@index([status])
+  @@index([isTrash])
+  @@index([createdAt])
+  @@index([name])
+  @@map("files")
+}
+
+model ShareLink {
+  id            String    @id @default(cuid())
+  token         String    @unique
+  fileId        String?
+  folderId      String?
+  password      String?
+  expiresAt     DateTime?
+  allowDownload Boolean   @default(true)
+  viewCount     Int       @default(0)
+  isActive      Boolean   @default(true)
+  userId        String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  file   File?  @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folder Folder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@index([fileId])
+  @@index([folderId])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@map("share_links")
+}
+
+model Activity {
+  id         String   @id @default(cuid())
+  action     String   // login, logout, upload, download, delete, rename, move, share, unshare, folder_create, folder_delete, password_change, profile_update, failed_login
+  status     String   @default("success") // success, failed
+  entityType String   // file, folder, share, account, system
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  deviceInfo String?
+  location   String?  // derived from IP
+  userId     String
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action])
+  @@index([status])
+  @@map("activities")
+}
+
+model FailedLogin {
+  id        String   @id @default(cuid())
+  email     String
+  ipAddress String?
+  userAgent String?
+  reason    String?  // invalid_password, user_not_found, suspended_account
+  userId    String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@index([ipAddress])
+  @@index([createdAt])
+  @@map("failed_logins")
+}
+
+model ImpersonationSession {
+  id           String   @id @default(cuid())
+  adminId      String
+  targetUserId String
+  token        String   @unique
+  expiresAt    DateTime
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  admin       User @relation("ImpersonationAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+  targetUser  User @relation("ImpersonationTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([targetUserId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("impersonation_sessions")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  adminId    String
+  action     String
+  targetType String
+  targetId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  admin User @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([action])
+  @@index([targetType])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model PlatformSettings {
+  id                      String @id @default("singleton")
+  defaultStorageQuotaGb   Int    @default(5)
+  maxUploadSizeMb         Int    @default(500)
+  allowedExtensions       String @default("jpg,jpeg,png,gif,webp,svg,mp4,webm,mov,avi,mkv,pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,zip,tar,gz,7z,mp3,wav,flac,aac,ogg")
+  blockedExtensions       String @default("exe,bat,sh,cmd,com,msi,scr,vbs,ps1,jar")
+  enablePublicSignups     Boolean @default(true)
+  enablePublicShares      Boolean @default(true)
+  maintenanceMode         Boolean @default(false)
+  siteAnnouncement        String  @default("")
+  showAnnouncement        Boolean @default(false)
+  updatedAt               DateTime @updatedAt
+
+  @@map("platform_settings")
+}
